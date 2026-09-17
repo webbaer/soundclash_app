@@ -59,6 +59,7 @@ def get_game_state(code: str):
         status=current_round.status,
         choices=[schemas.SongChoiceOut(**c.model_dump()) for c in current_round.choices],
         votes=[schemas.VoteOut(**v.model_dump()) for v in current_round.votes],
+        winner_choice_id=current_round.winner_choice_id,
     )
 
     return schemas.GameStateOut(

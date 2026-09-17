@@ -68,6 +68,7 @@ class RoundOut(BaseModel):
     status: RoundStatus
     choices: List[SongChoiceOut]
     votes: List[VoteOut]
+    winner_choice_id: Optional[int] = None
 
 
 # ---------------------------
