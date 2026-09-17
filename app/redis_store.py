@@ -1,4 +1,5 @@
 # app/redis_store.py
+import os
 import random
 import string
 from enum import Enum
@@ -7,8 +8,13 @@ from typing import List, Optional
 import redis
 from pydantic import BaseModel, Field
 
-# Redis-Client (Standard-Config lokal)
-r = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
+# Redis-Client (per Env konfigurierbar, Default lokal)
+r = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", "6379")),
+    db=int(os.getenv("REDIS_DB", "0")),
+    decode_responses=True,
+)
 
 
 class GameStatus(str, Enum):
@@ -105,7 +111,7 @@ def create_game(max_rounds: Optional[int] = None, code: Optional[str] = None) ->
     save_game(game)
     return game
 
-def add_player(code: str, name: str):
+def add_player(code: str, name: str) -> Player:
     game = _load_game_or_raise(code)
 
     # Host = erster Spieler
@@ -116,8 +122,9 @@ def add_player(code: str, name: str):
         name=name,
         is_host=is_host,
     )
+    game.next_player_id += 1
     game.players.append(player)
-    _save_game(game)
+    save_game(game)
     return player
 
 def start_new_round(code: str, category: str) -> Round:
@@ -187,7 +194,7 @@ def start_voting(code: str, round_id: int) -> None:
     save_game(game)
 
 
-def add_vote(code: str, round_id: int, voter_id: int, choice_id: int) -> None:
+def add_vote(code: str, round_id: int, voter_id: int, choice_id: int) -> Vote:
     game = _load_game_or_raise(code)
 
     round_obj = next((r for r in game.rounds if r.id == round_id), None)
@@ -215,6 +222,7 @@ def add_vote(code: str, round_id: int, voter_id: int, choice_id: int) -> None:
     game.next_vote_id += 1
     round_obj.votes.append(vote)
     save_game(game)
+    return vote
 
 def compute_winner_and_finish_round(code: str, round_id: int):
     game = _load_game_or_raise(code)

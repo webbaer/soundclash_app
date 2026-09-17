@@ -26,7 +26,7 @@ def cast_vote(game_code: str, round_id: int, vote_in: schemas.VoteCreate):
 @router.post("/winner/{game_code}/{round_id}")
 def decide_winner(game_code: str, round_id: int):
     try:
-        winner_choice = store.compute_results(
+        winner_choice = store.compute_winner_and_finish_round(
             code=game_code,
             round_id=round_id
         )
