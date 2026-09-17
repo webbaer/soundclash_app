@@ -124,6 +124,9 @@ def test_cannot_vote_for_own_song(client, game_code):
 def test_cannot_vote_twice(client, game_code):
     alice = join(client, game_code, "Alice")
     bob = join(client, game_code, "Bob")
+    # Carol ist mit dabei, damit die Runde nach Bobs Vote noch nicht
+    # vollstaendig ist und sich nicht automatisch schliesst
+    join(client, game_code, "Carol")
     round_obj = client.post(f"/rounds/{game_code}", json={"category": "Rock"}).json()
     choice = add_choice(client, game_code, round_obj["id"], alice["id"], "Song", "Artist")
     client.post(f"/rounds/{game_code}/{round_obj['id']}/start-voting")
@@ -224,3 +227,100 @@ def test_finish_game(client, game_code):
 
 def test_finish_unknown_game_returns_404(client):
     assert client.post("/games/NOPE00/finish").status_code == 404
+
+
+def test_round_closes_automatically_when_all_eligible_players_voted(client, game_code):
+    alice = join(client, game_code, "Alice")
+    bob = join(client, game_code, "Bob")
+
+    round_obj = client.post(f"/rounds/{game_code}", json={"category": "Rock"}).json()
+    alice_choice = add_choice(client, game_code, round_obj["id"], alice["id"], "A-Song", "A")
+    bob_choice = add_choice(client, game_code, round_obj["id"], bob["id"], "B-Song", "B")
+    client.post(f"/rounds/{game_code}/{round_obj['id']}/start-voting")
+
+    # Nach dem ersten Vote fehlt noch einer -> Runde laeuft weiter
+    client.post(
+        f"/votes/{game_code}/{round_obj['id']}",
+        json={"voter_id": alice["id"], "choice_id": bob_choice["id"]},
+    )
+    state = client.get(f"/games/{game_code}/state").json()
+    assert state["current_round"]["status"] == "voting"
+
+    # Mit dem zweiten Vote sind alle durch -> Runde schliesst von selbst
+    client.post(
+        f"/votes/{game_code}/{round_obj['id']}",
+        json={"voter_id": bob["id"], "choice_id": alice_choice["id"]},
+    )
+    state = client.get(f"/games/{game_code}/state").json()
+    assert state["current_round"]["status"] == "results"
+    assert state["current_round"]["winner_choice_id"] in (
+        alice_choice["id"],
+        bob_choice["id"],
+    )
+
+
+def test_player_without_foreign_song_does_not_block_the_round(client, game_code):
+    """Wer als Einziger einen Song hat, kann nicht abstimmen und zaehlt nicht mit."""
+    alice = join(client, game_code, "Alice")
+    bob = join(client, game_code, "Bob")
+    carol = join(client, game_code, "Carol")
+
+    round_obj = client.post(f"/rounds/{game_code}", json={"category": "Solo"}).json()
+    alice_choice = add_choice(client, game_code, round_obj["id"], alice["id"], "A-Song", "A")
+    client.post(f"/rounds/{game_code}/{round_obj['id']}/start-voting")
+
+    for voter in (bob, carol):
+        client.post(
+            f"/votes/{game_code}/{round_obj['id']}",
+            json={"voter_id": voter["id"], "choice_id": alice_choice["id"]},
+        )
+
+    # Alice fehlt in der Vote-Liste, trotzdem ist die Runde vollstaendig
+    state = client.get(f"/games/{game_code}/state").json()
+    assert state["current_round"]["status"] == "results"
+    assert state["current_round"]["winner_choice_id"] == alice_choice["id"]
+    players = {p["name"]: p for p in state["game"]["players"]}
+    assert players["Alice"]["score"] == 2
+
+
+def test_winner_endpoint_still_answers_after_automatic_close(client, game_code):
+    alice = join(client, game_code, "Alice")
+    bob = join(client, game_code, "Bob")
+
+    round_obj = client.post(f"/rounds/{game_code}", json={"category": "Rock"}).json()
+    alice_choice = add_choice(client, game_code, round_obj["id"], alice["id"], "A-Song", "A")
+    client.post(f"/rounds/{game_code}/{round_obj['id']}/start-voting")
+    client.post(
+        f"/votes/{game_code}/{round_obj['id']}",
+        json={"voter_id": bob["id"], "choice_id": alice_choice["id"]},
+    )
+
+    # Runde ist bereits zu -- der Endpoint liefert trotzdem das Ergebnis,
+    # und zwar mehrfach ohne die Punkte erneut zu vergeben
+    for _ in range(2):
+        resp = client.post(f"/votes/winner/{game_code}/{round_obj['id']}")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["winner_player_id"] == alice["id"]
+
+    players = {p["name"]: p for p in client.get(f"/games/{game_code}").json()["players"]}
+    assert players["Alice"]["score"] == 1
+
+
+def test_game_finishes_after_the_last_round(client, game_code):
+    alice = join(client, game_code, "Alice")
+    bob = join(client, game_code, "Bob")
+
+    # game_code-Fixture setzt max_rounds = 2
+    for round_number in (1, 2):
+        round_obj = client.post(
+            f"/rounds/{game_code}", json={"category": f"Runde {round_number}"}
+        ).json()
+        choice = add_choice(client, game_code, round_obj["id"], alice["id"], "Song", "A")
+        client.post(f"/rounds/{game_code}/{round_obj['id']}/start-voting")
+        client.post(
+            f"/votes/{game_code}/{round_obj['id']}",
+            json={"voter_id": bob["id"], "choice_id": choice["id"]},
+        )
+
+        status = client.get(f"/games/{game_code}").json()["status"]
+        assert status == ("results" if round_number == 1 else "finished")
